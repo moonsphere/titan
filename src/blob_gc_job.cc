@@ -232,7 +232,7 @@ Status BlobGCJob::DoRunGC() {
             std::move(blob_file_handle), std::move(blob_file_builder)));
       }
       s = blob_file_manager_->NewFile(&blob_file_handle,
-                                      Env::IOPriority::IO_LOW);
+                                      Env::IOPriority::IO_LOW, /*is_gc=*/true);
       if (!s.ok()) {
         break;
       }
@@ -324,11 +324,17 @@ Status BlobGCJob::BuildIterator(
   const auto& inputs = blob_gc_->inputs();
   assert(!inputs.empty());
   std::vector<std::unique_ptr<BlobFileIterator>> list;
+  // Route background GC reads through the dedicated GC rate limiter so they
+  // don't share the base DB rate_limiter with LSM flush/compaction.
+  EnvOptions gc_env_options(env_options_);
+  if (db_options_.gc_rate_limiter != nullptr) {
+    gc_env_options.rate_limiter = db_options_.gc_rate_limiter.get();
+  }
   for (std::size_t i = 0; i < inputs.size(); ++i) {
     std::unique_ptr<RandomAccessFileReader> file;
     // TODO(@DorianZheng) set read ahead size
     s = NewBlobFileReader(inputs[i]->file_number(), 0, db_options_,
-                          env_options_, env_, &file);
+                          gc_env_options, env_, &file);
     if (!s.ok()) {
       break;
     }

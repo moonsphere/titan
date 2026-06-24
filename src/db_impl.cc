@@ -35,22 +35,28 @@ class TitanDBImpl::FileManager : public BlobFileManager {
  public:
   FileManager(TitanDBImpl* db) : db_(db) {}
 
-  Status NewFile(std::unique_ptr<BlobFileHandle>* handle,
-                 Env::IOPriority pri) override {
+  Status NewFile(std::unique_ptr<BlobFileHandle>* handle, Env::IOPriority pri,
+                 bool is_gc) override {
     auto number = db_->blob_file_set_->NewFileNumber();
     auto name = BlobFileName(db_->dirname_, number);
 
     Status s;
     std::unique_ptr<WritableFileWriter> file;
     {
+      // Route background GC writes through the dedicated GC rate limiter so
+      // they don't share the base DB rate_limiter with LSM flush/compaction.
+      EnvOptions env_options(db_->env_options_);
+      if (is_gc && db_->db_options_.gc_rate_limiter != nullptr) {
+        env_options.rate_limiter = db_->db_options_.gc_rate_limiter.get();
+      }
       std::unique_ptr<FSWritableFile> f;
       s = db_->env_->GetFileSystem()->NewWritableFile(
-          name, FileOptions(db_->env_options_), &f, nullptr /*dbg*/);
+          name, FileOptions(env_options), &f, nullptr /*dbg*/);
       if (!s.ok()) return s;
 
       f->SetIOPriority(pri);
       file.reset(new WritableFileWriter(std::move(f), name,
-                                        FileOptions(db_->env_options_)));
+                                        FileOptions(env_options)));
     }
 
     handle->reset(new FileHandle(number, name, std::move(file)));

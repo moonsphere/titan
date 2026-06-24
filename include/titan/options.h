@@ -26,6 +26,14 @@ struct TitanDBOptions : public DBOptions {
   // Default: 1
   int32_t max_background_gc{1};
 
+  // Rate limiter for background GC IO (blob reads and writes during GC).
+  // If set, Titan throttles blob GC IO with this limiter independently from
+  // the base DB rate_limiter, so GC IO can be capped without affecting LSM
+  // flush/compaction or foreground writes.
+  //
+  // Default: nullptr (disabled)
+  std::shared_ptr<RateLimiter> gc_rate_limiter{nullptr};
+
   // How often to schedule delete obsolete blob files periods.
   // If set zero, obsolete blob files won't be deleted.
   //

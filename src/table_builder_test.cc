@@ -26,7 +26,8 @@ class FileManager : public BlobFileManager {
         blob_file_set_(blob_file_set) {}
 
   Status NewFile(std::unique_ptr<BlobFileHandle>* handle,
-                 Env::IOPriority pri = Env::IOPriority::IO_TOTAL) override {
+                 Env::IOPriority pri = Env::IOPriority::IO_TOTAL,
+                 bool /*is_gc*/ = false) override {
     auto number = number_.fetch_add(1);
     auto name = BlobFileName(db_options_.dirname, number);
     std::unique_ptr<WritableFileWriter> file;

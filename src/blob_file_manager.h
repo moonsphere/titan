@@ -32,8 +32,13 @@ class BlobFileManager {
   // The reason why set the io priority for WritableFile in Flush,
   // Compaction and GC is that the ratelimiter will use the default
   // priority IO_TOTAL which won't be limited in ratelimiter.
+  //
+  // When "is_gc" is true and TitanDBOptions.gc_rate_limiter is set, the new
+  // file's IO is throttled by the dedicated GC rate limiter instead of the
+  // base DB rate_limiter.
   virtual Status NewFile(std::unique_ptr<BlobFileHandle>* handle,
-                         Env::IOPriority pri = Env::IOPriority::IO_TOTAL) = 0;
+                         Env::IOPriority pri = Env::IOPriority::IO_TOTAL,
+                         bool is_gc = false) = 0;
 
   // Finishes the file with the provided metadata. Stops writting to
   // the file anymore.
