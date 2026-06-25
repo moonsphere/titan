@@ -332,9 +332,10 @@ Status BlobGCJob::BuildIterator(
   }
   for (std::size_t i = 0; i < inputs.size(); ++i) {
     std::unique_ptr<RandomAccessFileReader> file;
-    // TODO(@DorianZheng) set read ahead size
-    s = NewBlobFileReader(inputs[i]->file_number(), 0, db_options_,
-                          gc_env_options, env_, &file);
+    s = NewBlobFileReader(
+        inputs[i]->file_number(),
+        blob_gc_->titan_cf_options().blob_gc_readahead_size, db_options_,
+        gc_env_options, env_, &file);
     if (!s.ok()) {
       break;
     }

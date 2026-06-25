@@ -125,6 +125,14 @@ struct TitanCFOptions : public ColumnFamilyOptions {
   // Default: 1GB
   uint64_t max_gc_batch_size{1 << 30};
 
+  // Readahead size when GC reads blob files. 0 disables readahead (reads are
+  // issued per blob record). A larger value batches the GC scan's disk reads
+  // into fewer, larger syscalls. Experimental knob for A/B; does not change
+  // read amplification (GC still scans the file), only read batching.
+  //
+  // Default: 0 (disabled)
+  uint64_t blob_gc_readahead_size{0};
+
   // Min batch size for GC.
   //
   // Default: 512MB
@@ -219,6 +227,7 @@ struct ImmutableTitanCFOptions {
       : blob_file_target_size(opts.blob_file_target_size),
         blob_cache(opts.blob_cache),
         max_gc_batch_size(opts.max_gc_batch_size),
+        blob_gc_readahead_size(opts.blob_gc_readahead_size),
         min_gc_batch_size(opts.min_gc_batch_size),
         merge_small_file_threshold(opts.merge_small_file_threshold),
         level_merge(opts.level_merge),
@@ -229,6 +238,8 @@ struct ImmutableTitanCFOptions {
   std::shared_ptr<Cache> blob_cache;
 
   uint64_t max_gc_batch_size;
+
+  uint64_t blob_gc_readahead_size;
 
   uint64_t min_gc_batch_size;
 
