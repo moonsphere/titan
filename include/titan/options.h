@@ -34,6 +34,17 @@ struct TitanDBOptions : public DBOptions {
   // Default: nullptr (disabled)
   std::shared_ptr<RateLimiter> gc_rate_limiter{nullptr};
 
+  // Hook invoked on the Titan background GC thread around the blob GC IO phase
+  // (reads + writes). "enter" runs just before the GC job IO, "exit" just
+  // after. The embedder can use it to tag that thread's IO (e.g. set a
+  // thread-local IO type) so blob GC IO is prioritized/throttled distinctly.
+  // Both may be null.
+  //
+  // Default: nullptr (no hook)
+  void* gc_io_hook_arg{nullptr};
+  void (*gc_io_hook_enter)(void*){nullptr};
+  void (*gc_io_hook_exit)(void*){nullptr};
+
   // How often to schedule delete obsolete blob files periods.
   // If set zero, obsolete blob files won't be deleted.
   //

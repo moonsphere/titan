@@ -271,9 +271,18 @@ Status TitanDBImpl::BackgroundGC(LogBuffer* log_buffer,
     s = blob_gc_job.Prepare();
     if (s.ok()) {
       mutex_.Unlock();
+      // Tag this thread's IO so the embedder can prioritize blob GC IO. The
+      // mutex is released here, so any throttling sleep won't block foreground
+      // Titan operations.
+      if (db_options_.gc_io_hook_enter != nullptr) {
+        db_options_.gc_io_hook_enter(db_options_.gc_io_hook_arg);
+      }
       TEST_SYNC_POINT("TitanDBImpl::BackgroundGC::BeforeRunGCJob");
       s = blob_gc_job.Run();
       TEST_SYNC_POINT("TitanDBImpl::BackgroundGC::AfterRunGCJob");
+      if (db_options_.gc_io_hook_exit != nullptr) {
+        db_options_.gc_io_hook_exit(db_options_.gc_io_hook_arg);
+      }
       mutex_.Lock();
     }
     if (s.ok()) {
