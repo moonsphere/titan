@@ -282,6 +282,14 @@ class BlobFileMeta {
   }
   TitanInternalStats::StatsType GetDiscardableRatioLevel() const;
   uint64_t GetHolePunchableSize() const {
+    // Only block-aligned files can be reclaimed by punch-hole GC. A file with
+    // block_size_ == 0 (e.g. written before punch-hole GC was enabled, or by an
+    // older build) is not aligned and must never be selected for punch-hole GC
+    // -- otherwise Roundup(size, block_size_) divides by zero. Report 0
+    // punchable bytes so the picker skips it.
+    if (block_size_ == 0) {
+      return 0;
+    }
     return effective_file_size_ - live_data_size_;
   }
   void Dump(bool with_keys) const;

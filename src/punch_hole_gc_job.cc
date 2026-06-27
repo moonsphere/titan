@@ -92,7 +92,12 @@ Status PunchHoleGCJob::HolePunchSingleBlobFile(
       return s;
     }
 
-    aligned_data_size = Roundup(blob_index.blob_handle.size, block_size);
+    // Guard against block_size == 0 (non-aligned file). The picker should
+    // already skip such files (GetHolePunchableSize returns 0), but never
+    // divide by zero here. Mirrors the guard in BlobFileIterator.
+    aligned_data_size = block_size > 0
+                            ? Roundup(blob_index.blob_handle.size, block_size)
+                            : blob_index.blob_handle.size;
 
     if (!discardable) {
       effective_file_size += aligned_data_size;
