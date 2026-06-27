@@ -236,7 +236,13 @@ void BlobFileMergeIterator::SeekToFirst() {
     current_ = min_heap_.top();
     min_heap_.pop();
   } else {
-    status_ = Status::Aborted("No iterator is valid");
+    // No input blob file has any valid record. With punch-hole GC, an input
+    // file can become entirely holes (all its blobs were dead and punched), so
+    // "no valid iterator" is a legitimate empty state, not an error. Leave the
+    // iterator invalid (current_ == nullptr) so the GC job is a no-op and the
+    // empty input files are cleaned up normally, instead of aborting GC and
+    // tripping a fatal background error.
+    current_ = nullptr;
   }
 }
 

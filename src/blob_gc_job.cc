@@ -170,7 +170,12 @@ Status BlobGCJob::DoRunGC() {
   std::string last_key;
   bool last_key_is_fresh = false;
   gc_iter->SeekToFirst();
-  assert(gc_iter->Valid());
+  if (!gc_iter->status().ok()) {
+    return gc_iter->status();
+  }
+  // An empty iterator (e.g. all input blobs already reclaimed by punch-hole GC)
+  // is not an error -- there is simply nothing to rewrite. The loop below is
+  // skipped and the (empty) input files are cleaned up by Finish().
   for (; gc_iter->Valid(); gc_iter->Next()) {
     if (IsShutingDown()) {
       s = Status::ShutdownInProgress();
