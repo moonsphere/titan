@@ -446,8 +446,16 @@ Status BlobGCJob::InstallOutputBlobFiles() {
     auto file = std::make_shared<BlobFileMeta>(
         builder.first->GetNumber(), builder.first->GetFile()->GetFileSize(), 0,
         0, builder.second->GetSmallestKey(), builder.second->GetLargestKey(),
-        /*block_size=*/0);
+        builder.second->GetBlockSize());
     file->set_live_data_size(builder.second->live_data_size());
+    // Initialize effective_file_size so this freshly written file is a valid
+    // punch-hole GC candidate. Without this, GC-produced files (the majority on
+    // a churning cluster) keep effective_file_size == 0, so GetHolePunchableSize
+    // is meaningless and punch-hole GC never fires. Also propagate the real
+    // block_size (was hardcoded 0, which made the file non-aligned and skipped
+    // by the punch-hole picker). Mirrors TitanTableBuilder's flush/compaction
+    // output path.
+    file->set_effective_file_size(builder.second->live_data_size());
     file->FileStateTransit(BlobFileMeta::FileEvent::kGCOutput);
     RecordInHistogram(statistics(stats_), TITAN_GC_OUTPUT_FILE_SIZE,
                       file->file_size());
