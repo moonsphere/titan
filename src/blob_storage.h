@@ -60,6 +60,16 @@ class BlobStorage {
     return punch_hole_score_;
   }
 
+  // Round-robin gate to interleave punch-hole GC with regular (rewrite) GC. A
+  // churning workload always has regular GC candidates, and regular GC is picked
+  // first, so without this punch-hole GC would be starved forever. Returns true
+  // on every other call so punch-hole GC gets a fair share of GC slots. It stays
+  // throttled by the one-pending + snapshot-oldest gates, so regular GC remains
+  // the space-safety backstop.
+  bool ShouldTryPunchHoleGCFirst() {
+    return (gc_pick_seq_.fetch_add(1, std::memory_order_relaxed) & 1) == 1;
+  }
+
   Cache* blob_cache() { return blob_cache_.get(); }
 
   // Gets the blob record pointed by the blob index. The provided
@@ -231,6 +241,8 @@ class BlobStorage {
 
   std::vector<GCScore> gc_score_;
   std::vector<GCScore> punch_hole_score_;
+  // Interleaves punch-hole GC with regular GC; see ShouldTryPunchHoleGCFirst().
+  std::atomic<uint64_t> gc_pick_seq_{0};
 
   std::list<std::pair<uint64_t, SequenceNumber>> obsolete_files_;
   // It is marked when the column family handle is destroyed, indicating the

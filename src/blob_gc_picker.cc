@@ -20,6 +20,18 @@ BasicBlobGCPicker::~BasicBlobGCPicker() {}
 
 std::unique_ptr<BlobGC> BasicBlobGCPicker::PickBlobGC(BlobStorage* blob_storage,
                                                       bool allow_punch_hole) {
+  // Interleave punch-hole GC with regular (rewrite) GC. Regular GC is picked
+  // first below, but a churning workload always has regular GC candidates, so
+  // without giving punch-hole GC its own turn it would be starved forever. On
+  // every other call, try punch-hole first (falling back to regular GC if there
+  // is no punch-hole candidate). Punch-hole GC stays throttled by the
+  // one-pending + snapshot-oldest gates, so regular GC remains the space-safety
+  // backstop.
+  if (allow_punch_hole && blob_storage->ShouldTryPunchHoleGCFirst()) {
+    if (auto punch_hole_gc = PickPunchHoleGC(blob_storage)) {
+      return punch_hole_gc;
+    }
+  }
   auto regular_gc = PickRegularBlobGC(blob_storage);
   if (regular_gc) {
     return regular_gc;
