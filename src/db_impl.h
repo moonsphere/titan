@@ -292,6 +292,15 @@ class TitanDBImpl : public TitanDB {
   bool MaybeRunPendingPunchHoleGC();
   Status BackgroundGC(LogBuffer* log_buffer, uint32_t column_family_id);
 
+  // GC sampling probe (enable_gc_sampling): estimate the garbage ratio of
+  // blob files whose tracked discardable ratio stays silent, by sampling
+  // records and checking their liveness against the LSM. Results are stored
+  // on the file metas and feed the regular GC picker.
+  // REQUIRE: mutex_ NOT held
+  void SampleBlobFilesForGC(
+      const std::vector<std::shared_ptr<BlobFileMeta>>& files,
+      ColumnFamilyHandle* cfh, const TitanCFOptions& cf_options);
+
   void PurgeObsoleteFiles();
   Status PurgeObsoleteFilesImpl();
 

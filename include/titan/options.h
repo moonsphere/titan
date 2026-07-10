@@ -201,6 +201,39 @@ struct TitanCFOptions : public ColumnFamilyOptions {
   uint64_t block_size{4096};
   uint64_t punch_hole_threshold{0};
 
+  // If set true, background GC probes blob files whose *tracked* discardable
+  // ratio is below blob_file_discardable_ratio by sampling records from the
+  // file and checking their liveness against the LSM. The estimated garbage
+  // ratio is stored on the file meta and feeds the regular GC picker.
+  //
+  // Motivation: the tracked ratio only grows when compactions drop the keys
+  // referencing a blob file. With value separation the SST layer can be so
+  // small that size-based compactions rarely fire, so tombstones never sink
+  // and the tracked ratio stays near zero while the file is mostly garbage.
+  //
+  // Overestimation is harmless: GC re-verifies liveness of every record
+  // before discarding it.
+  //
+  // Default: false
+  bool enable_gc_sampling{false};
+
+  // Max number of blob files probed per background GC round.
+  //
+  // Default: 8
+  uint64_t gc_sampling_files_per_round{8};
+
+  // Number of consecutive records sampled per probed file, starting from a
+  // random offset. Each sampled record costs one full record read plus one
+  // LSM index lookup.
+  //
+  // Default: 64
+  uint64_t gc_sampling_records_per_file{64};
+
+  // Minimum interval between two probes of the same blob file.
+  //
+  // Default: 600
+  uint64_t gc_sampling_min_interval_seconds{600};
+
   TitanCFOptions() = default;
   explicit TitanCFOptions(const ColumnFamilyOptions& options)
       : ColumnFamilyOptions(options) {}

@@ -277,8 +277,23 @@ class BlobFileMeta {
       return 0;
     }
     // TODO: Exclude meta blocks from file size
-    return 1 - (static_cast<double>(live_data_size_) /
-                (file_size_ - kBlobMaxHeaderSize - kBlobFooterSize));
+    double tracked = 1 - (static_cast<double>(live_data_size_) /
+                          (file_size_ - kBlobMaxHeaderSize - kBlobFooterSize));
+    // The tracked ratio only grows when compactions drop the referencing
+    // keys; the sampled ratio (GC sampling probe, enable_gc_sampling) may
+    // know better. Overestimation is harmless since GC re-verifies the
+    // liveness of every record.
+    double sampled = sampled_discardable_ratio_.load(std::memory_order_relaxed);
+    return tracked > sampled ? tracked : sampled;
+  }
+  void set_sampled_discardable_ratio(double ratio) {
+    sampled_discardable_ratio_.store(ratio, std::memory_order_relaxed);
+  }
+  uint64_t last_sample_micros() const {
+    return last_sample_micros_.load(std::memory_order_relaxed);
+  }
+  void set_last_sample_micros(uint64_t micros) {
+    last_sample_micros_.store(micros, std::memory_order_relaxed);
   }
   TitanInternalStats::StatsType GetDiscardableRatioLevel() const;
   uint64_t GetHolePunchableSize() const {
@@ -335,6 +350,11 @@ class BlobFileMeta {
   // block size does not align with file system block size.
   int64_t disk_usage_{0};
   std::atomic<FileState> state_{FileState::kNone};
+  // Garbage ratio estimated by the GC sampling probe (enable_gc_sampling).
+  // Zero until the file is first probed. Not persistent: rebuilt lazily by
+  // re-probing after restart.
+  std::atomic<double> sampled_discardable_ratio_{0};
+  std::atomic<uint64_t> last_sample_micros_{0};
 };
 
 // Format of blob file header for version 1 (8 bytes):

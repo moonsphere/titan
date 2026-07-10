@@ -1,6 +1,11 @@
 #include "test_util/sync_point.h"
 
+#include <limits>
+
+#include "util/random.h"
+
 #include "blob_file_iterator.h"
+#include "blob_file_reader.h"
 #include "blob_file_size_collector.h"
 #include "blob_gc_job.h"
 #include "blob_gc_picker.h"
@@ -296,10 +301,55 @@ Status TitanDBImpl::BackgroundGC(LogBuffer* log_buffer,
     std::shared_ptr<BlobGCPicker> blob_gc_picker =
         std::make_shared<BasicBlobGCPicker>(db_options_, cf_options,
                                             stats_.get());
-    blob_gc = blob_gc_picker->PickBlobGC(
-        blob_storage.get(),
-        /*allow_punch_hole=*/cf_options.punch_hole_threshold > 0 &&
-            pending_punch_hole_gc_ == nullptr);
+    const bool allow_punch_hole = cf_options.punch_hole_threshold > 0 &&
+                                  pending_punch_hole_gc_ == nullptr;
+    blob_gc =
+        blob_gc_picker->PickBlobGC(blob_storage.get(), allow_punch_hole);
+
+    // Second chance via the sampling probe: when the tracked ledger sees
+    // nothing worth GC, probe a few silent files against the LSM and re-pick
+    // with the refreshed estimates. The tracked ratio only grows when
+    // compactions drop the referencing keys, which a tiny value-separated
+    // SST layer may never trigger.
+    if (!blob_gc && cf_options.enable_gc_sampling) {
+      std::vector<std::shared_ptr<BlobFileMeta>> to_probe;
+      uint64_t now_micros = env_->NowMicros();
+      uint64_t min_interval_micros =
+          cf_options.gc_sampling_min_interval_seconds * 1000000ULL;
+      std::map<uint64_t, std::weak_ptr<BlobFileMeta>> all_files;
+      blob_storage->ExportBlobFiles(all_files);
+      for (auto& number_and_file : all_files) {
+        if (to_probe.size() >= cf_options.gc_sampling_files_per_round) break;
+        auto file = number_and_file.second.lock();
+        if (file == nullptr ||
+            file->file_state() != BlobFileMeta::FileState::kNormal ||
+            file->file_size() <= cf_options.merge_small_file_threshold ||
+            file->GetDiscardableRatio() >=
+                cf_options.blob_file_discardable_ratio ||
+            now_micros - file->last_sample_micros() < min_interval_micros) {
+          continue;
+        }
+        to_probe.emplace_back(std::move(file));
+      }
+      if (!to_probe.empty()) {
+        cfh = db_impl_->GetColumnFamilyHandleUnlocked(column_family_id);
+        assert(column_family_id == cfh->GetID());
+        mutex_.Unlock();
+        SampleBlobFilesForGC(to_probe, cfh.get(), cf_options);
+        mutex_.Lock();
+        blob_storage->ComputeGCScore();
+        blob_gc =
+            blob_gc_picker->PickBlobGC(blob_storage.get(), allow_punch_hole);
+      }
+    }
+
+    if (blob_gc) {
+      if (!cfh) {
+        cfh = db_impl_->GetColumnFamilyHandleUnlocked(column_family_id);
+        assert(column_family_id == cfh->GetID());
+      }
+      blob_gc->SetColumnFamily(cfh.get());
+    }
   }
 
   Status s;
@@ -408,6 +458,93 @@ Status TitanDBImpl::TEST_StartGC(uint32_t column_family_id) {
     }
   }
   return s;
+}
+
+void TitanDBImpl::SampleBlobFilesForGC(
+    const std::vector<std::shared_ptr<BlobFileMeta>>& files,
+    ColumnFamilyHandle* cfh, const TitanCFOptions& cf_options) {
+  // Route probe reads through the dedicated GC rate limiter, same as GC
+  // itself, so probing never contends with foreground IO.
+  EnvOptions gc_env_options(env_options_);
+  if (db_options_.gc_rate_limiter != nullptr) {
+    gc_env_options.rate_limiter = db_options_.gc_rate_limiter.get();
+  }
+  uint64_t records_per_file =
+      std::max<uint64_t>(cf_options.gc_sampling_records_per_file, 1);
+  for (auto& file : files) {
+    if (shuting_down_.load(std::memory_order_acquire)) return;
+    file->set_last_sample_micros(env_->NowMicros());
+    std::unique_ptr<RandomAccessFileReader> reader;
+    Status s = NewBlobFileReader(file->file_number(), 0, db_options_,
+                                 gc_env_options, env_, &reader);
+    if (!s.ok()) {
+      TITAN_LOG_WARN(db_options_.info_log,
+                     "Titan GC sampling: open blob file %" PRIu64
+                     " failed: %s",
+                     file->file_number(), s.ToString().c_str());
+      continue;
+    }
+    BlobFileIterator iter(std::move(reader), file->file_number(),
+                          file->file_size(), cf_options);
+    // Land before a random record, then walk a contiguous window. The
+    // window start is uniform over the file, so with in-place-update
+    // workloads (garbage spread evenly) the estimate is unbiased.
+    uint64_t entries = file->file_entries();
+    if (entries > records_per_file) {
+      uint64_t skip = Random::GetTLSInstance()->Uniform(
+          static_cast<int>(std::min<uint64_t>(
+              entries - records_per_file,
+              std::numeric_limits<int32_t>::max())));
+      uint64_t approx_offset =
+          file->file_size() * skip / std::max<uint64_t>(entries, 1);
+      iter.IterateForPrev(approx_offset);
+      if (!iter.status().ok()) {
+        // Fall back to the file head.
+        iter.IterateForPrev(0);
+      }
+    } else {
+      iter.IterateForPrev(0);
+    }
+    uint64_t sampled = 0;
+    uint64_t dead = 0;
+    for (iter.Next(); iter.Valid() && sampled < records_per_file;
+         iter.Next()) {
+      if (shuting_down_.load(std::memory_order_acquire)) return;
+      PinnableSlice index_entry;
+      bool is_blob_index = false;
+      DBImpl::GetImplOptions gopts;
+      gopts.column_family = cfh;
+      gopts.value = &index_entry;
+      gopts.is_blob_index = &is_blob_index;
+      Status gs = db_impl_->GetImpl(ReadOptions(), iter.key(), gopts);
+      bool discardable = false;
+      if (gs.IsNotFound() || (gs.ok() && !is_blob_index)) {
+        // Key deleted, or updated with a value now inlined in the LSM.
+        discardable = true;
+      } else if (gs.ok()) {
+        BlobIndex other_blob_index;
+        if (!other_blob_index.DecodeFrom(&index_entry).ok()) {
+          continue;
+        }
+        discardable = !(iter.GetBlobIndex() == other_blob_index);
+      } else {
+        // Read error: skip this record without counting it.
+        continue;
+      }
+      sampled++;
+      if (discardable) dead++;
+    }
+    if (sampled > 0) {
+      double ratio = static_cast<double>(dead) / sampled;
+      file->set_sampled_discardable_ratio(ratio);
+      TITAN_LOG_INFO(db_options_.info_log,
+                     "Titan GC sampling: blob file %" PRIu64
+                     " sampled %" PRIu64 " records, estimated garbage ratio "
+                     "%.2f (tracked-and-sampled max %.2f)",
+                     file->file_number(), sampled, ratio,
+                     file->GetDiscardableRatio());
+    }
+  }
 }
 
 void TitanDBImpl::TEST_WaitForBackgroundGC() {
