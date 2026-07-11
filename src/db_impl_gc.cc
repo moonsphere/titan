@@ -311,9 +311,14 @@ Status TitanDBImpl::BackgroundGC(LogBuffer* log_buffer,
     // with the refreshed estimates. The tracked ratio only grows when
     // compactions drop the referencing keys, which a tiny value-separated
     // SST layer may never trigger.
-    if (!blob_gc && cf_options.enable_gc_sampling) {
+    uint64_t now_micros = env_->NowMicros();
+    // Probe rounds are globally rate-limited: their random reads mix into
+    // the write stream and inflate everyone's write latency on cloud disks.
+    if (!blob_gc && cf_options.enable_gc_sampling &&
+        now_micros - last_gc_sampling_round_micros_.load(
+                         std::memory_order_relaxed) >=
+            cf_options.gc_sampling_round_interval_seconds * 1000000ULL) {
       std::vector<std::shared_ptr<BlobFileMeta>> to_probe;
-      uint64_t now_micros = env_->NowMicros();
       uint64_t min_interval_micros =
           cf_options.gc_sampling_min_interval_seconds * 1000000ULL;
       std::map<uint64_t, std::weak_ptr<BlobFileMeta>> all_files;
@@ -332,6 +337,8 @@ Status TitanDBImpl::BackgroundGC(LogBuffer* log_buffer,
         to_probe.emplace_back(std::move(file));
       }
       if (!to_probe.empty()) {
+        last_gc_sampling_round_micros_.store(now_micros,
+                                             std::memory_order_relaxed);
         cfh = db_impl_->GetColumnFamilyHandleUnlocked(column_family_id);
         assert(column_family_id == cfh->GetID());
         mutex_.Unlock();

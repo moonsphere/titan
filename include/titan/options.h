@@ -234,6 +234,14 @@ struct TitanCFOptions : public ColumnFamilyOptions {
   // Default: 600
   uint64_t gc_sampling_min_interval_seconds{600};
 
+  // Minimum interval between two probe rounds (any files). Bounds the
+  // probe's standing read load: on cloud disks the extra random reads
+  // inflate write latency for everyone sharing the device (bench9: a
+  // single-threaded delete scan slowed 25x while the probe ran freely).
+  //
+  // Default: 60
+  uint64_t gc_sampling_round_interval_seconds{60};
+
   TitanCFOptions() = default;
   explicit TitanCFOptions(const ColumnFamilyOptions& options)
       : ColumnFamilyOptions(options) {}

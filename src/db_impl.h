@@ -404,6 +404,9 @@ class TitanDBImpl : public TitanDB {
   int bg_gc_scheduled_ = 0;
   // REQUIRE: mutex_ held.
   int bg_gc_running_ = 0;
+  // Last GC sampling probe round (micros); bounds the probe's standing
+  // read load across all BackgroundGC rounds.
+  std::atomic<uint64_t> last_gc_sampling_round_micros_{0};
   // REQUIRE: mutex_ held.
   int unscheduled_gc_ = 0;
   // REQUIRE: mutex_ held.
