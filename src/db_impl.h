@@ -287,6 +287,10 @@ class TitanDBImpl : public TitanDB {
   // REQUIRE: mutex_ held
   void MaybeScheduleGC();
 
+  // Periodic GC tick (gc_tick_period_sec): enqueue a GC check for every
+  // column family so reclaim keeps running when writes go idle.
+  void TickGC();
+
   static void BGWorkGC(void* db);
   void BackgroundCallGC();
   bool MaybeRunPendingPunchHoleGC();
@@ -381,6 +385,7 @@ class TitanDBImpl : public TitanDB {
 
   // handle for dump internal stats at fixed intervals.
   std::unique_ptr<RepeatableThread> thread_dump_stats_;
+  std::unique_ptr<RepeatableThread> thread_gc_tick_;
 
   std::unique_ptr<port::Thread> thread_initialize_gc_;
 

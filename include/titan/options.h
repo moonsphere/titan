@@ -51,6 +51,15 @@ struct TitanDBOptions : public DBOptions {
   // Default: 10
   uint32_t purge_obsolete_files_period_sec{10};  // 10s
 
+  // If non-zero, enqueue a background GC check for every column family
+  // every gc_tick_period_sec, even when no flush/compaction happens.
+  // Without this, GC scheduling rides only on flush/compaction events, so
+  // reclaim stalls exactly when the system goes idle — the natural window
+  // to settle accumulated space debt.
+  //
+  // Default: 0 (disabled)
+  uint32_t gc_tick_period_sec{0};
+
   // If non-zero, dump titan internal stats to info log every
   // titan_stats_dump_period_sec.
   //

@@ -4,6 +4,7 @@
 #define __STDC_FORMAT_MACROS
 #endif
 
+#include <algorithm>
 #include <cinttypes>
 
 #include "db/arena_wrapped_db_iter.h"
@@ -190,6 +191,28 @@ void TitanDBImpl::StartBackgroundTasks() {
         env_->GetSystemClock().get(),
         db_options_.titan_stats_dump_period_sec * 1000 * 1000));
   }
+  if (thread_gc_tick_ == nullptr && db_options_.gc_tick_period_sec > 0) {
+    thread_gc_tick_.reset(new rocksdb::RepeatableThread(
+        [this]() { TitanDBImpl::TickGC(); }, "titangt",
+        env_->GetSystemClock().get(),
+        static_cast<uint64_t>(db_options_.gc_tick_period_sec) * 1000 * 1000));
+  }
+}
+
+void TitanDBImpl::TickGC() {
+  if (shuting_down_.load(std::memory_order_acquire)) return;
+  if (!initialized_.load(std::memory_order_acquire)) return;
+  MutexLock l(&mutex_);
+  for (auto& cf : cf_info_) {
+    if (blob_file_set_->IsColumnFamilyObsolete(cf.first)) continue;
+    // Don't stack duplicate entries when GC threads are saturated.
+    if (std::find(gc_queue_.begin(), gc_queue_.end(), cf.first) !=
+        gc_queue_.end()) {
+      continue;
+    }
+    AddToGCQueue(cf.first);
+  }
+  MaybeScheduleGC();
 }
 
 Status TitanDBImpl::ValidateOptions(
@@ -435,6 +458,13 @@ Status TitanDBImpl::CloseImpl() {
     thread_dump_stats_->cancel();
     mutex_.Lock();
     thread_dump_stats_.reset();
+    mutex_.Unlock();
+  }
+
+  if (thread_gc_tick_ != nullptr) {
+    thread_gc_tick_->cancel();
+    mutex_.Lock();
+    thread_gc_tick_.reset();
     mutex_.Unlock();
   }
 
