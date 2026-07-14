@@ -312,11 +312,12 @@ Status TitanDBImpl::BackgroundGC(LogBuffer* log_buffer,
     // compactions drop the referencing keys, which a tiny value-separated
     // SST layer may never trigger.
     uint64_t now_micros = env_->NowMicros();
-    // Probe rounds are globally rate-limited: their random reads mix into
+    // Probe rounds are rate-limited per CF: their random reads mix into
     // the write stream and inflate everyone's write latency on cloud disks.
+    // The timestamp lives on BlobStorage so one CF's rounds never starve
+    // another CF's sampling.
     if (!blob_gc && cf_options.enable_gc_sampling &&
-        now_micros - last_gc_sampling_round_micros_.load(
-                         std::memory_order_relaxed) >=
+        now_micros - blob_storage->last_gc_sampling_round_micros() >=
             cf_options.gc_sampling_round_interval_seconds * 1000000ULL) {
       std::vector<std::shared_ptr<BlobFileMeta>> to_probe;
       uint64_t min_interval_micros =
@@ -337,8 +338,7 @@ Status TitanDBImpl::BackgroundGC(LogBuffer* log_buffer,
         to_probe.emplace_back(std::move(file));
       }
       if (!to_probe.empty()) {
-        last_gc_sampling_round_micros_.store(now_micros,
-                                             std::memory_order_relaxed);
+        blob_storage->set_last_gc_sampling_round_micros(now_micros);
         cfh = db_impl_->GetColumnFamilyHandleUnlocked(column_family_id);
         assert(column_family_id == cfh->GetID());
         mutex_.Unlock();

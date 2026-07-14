@@ -55,6 +55,13 @@ class BlobStorage {
     return gc_score_;
   }
 
+  uint64_t last_gc_sampling_round_micros() const {
+    return last_gc_sampling_round_micros_.load(std::memory_order_relaxed);
+  }
+  void set_last_gc_sampling_round_micros(uint64_t micros) {
+    last_gc_sampling_round_micros_.store(micros, std::memory_order_relaxed);
+  }
+
   const std::vector<GCScore> punch_hole_score() {
     MutexLock l(&mutex_);
     return punch_hole_score_;
@@ -243,6 +250,10 @@ class BlobStorage {
   std::vector<GCScore> punch_hole_score_;
   // Interleaves punch-hole GC with regular GC; see ShouldTryPunchHoleGCFirst().
   std::atomic<uint64_t> gc_pick_seq_{0};
+
+  // Last GC sampling probe round for THIS column family (micros). Per-CF so
+  // one CF's probe round cannot starve other CFs sharing the DB.
+  std::atomic<uint64_t> last_gc_sampling_round_micros_{0};
 
   std::list<std::pair<uint64_t, SequenceNumber>> obsolete_files_;
   // It is marked when the column family handle is destroyed, indicating the
