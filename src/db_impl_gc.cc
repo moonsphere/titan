@@ -315,10 +315,14 @@ Status TitanDBImpl::BackgroundGC(LogBuffer* log_buffer,
     // Probe rounds are rate-limited per CF: their random reads mix into
     // the write stream and inflate everyone's write latency on cloud disks.
     // The timestamp lives on BlobStorage so one CF's rounds never starve
-    // another CF's sampling.
+    // another CF's sampling. Claim the round with a CAS: several GC threads
+    // run BackgroundGC concurrently and a plain check-then-set let them all
+    // pass the gate together (observed 5s-spaced rounds against a 60s
+    // interval).
     if (!blob_gc && cf_options.enable_gc_sampling &&
-        now_micros - blob_storage->last_gc_sampling_round_micros() >=
-            cf_options.gc_sampling_round_interval_seconds * 1000000ULL) {
+        blob_storage->try_claim_gc_sampling_round(
+            now_micros,
+            cf_options.gc_sampling_round_interval_seconds * 1000000ULL)) {
       std::vector<std::shared_ptr<BlobFileMeta>> to_probe;
       uint64_t min_interval_micros =
           cf_options.gc_sampling_min_interval_seconds * 1000000ULL;
@@ -338,7 +342,6 @@ Status TitanDBImpl::BackgroundGC(LogBuffer* log_buffer,
         to_probe.emplace_back(std::move(file));
       }
       if (!to_probe.empty()) {
-        blob_storage->set_last_gc_sampling_round_micros(now_micros);
         cfh = db_impl_->GetColumnFamilyHandleUnlocked(column_family_id);
         assert(column_family_id == cfh->GetID());
         mutex_.Unlock();

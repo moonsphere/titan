@@ -55,11 +55,16 @@ class BlobStorage {
     return gc_score_;
   }
 
-  uint64_t last_gc_sampling_round_micros() const {
-    return last_gc_sampling_round_micros_.load(std::memory_order_relaxed);
-  }
-  void set_last_gc_sampling_round_micros(uint64_t micros) {
-    last_gc_sampling_round_micros_.store(micros, std::memory_order_relaxed);
+  // Atomically claim a sampling probe round: returns true iff at least
+  // `interval_micros` passed since the last claimed round, and this caller
+  // won the claim (concurrent BackgroundGC threads race for it).
+  bool try_claim_gc_sampling_round(uint64_t now_micros,
+                                   uint64_t interval_micros) {
+    uint64_t last =
+        last_gc_sampling_round_micros_.load(std::memory_order_relaxed);
+    if (now_micros - last < interval_micros) return false;
+    return last_gc_sampling_round_micros_.compare_exchange_strong(
+        last, now_micros, std::memory_order_relaxed);
   }
 
   const std::vector<GCScore> punch_hole_score() {
